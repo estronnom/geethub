@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+</head>
+<body>
+<a href="/generate">Generate new token</a>
+<form action="/" method="get">
+    <p><label>Enter your token</label><label>
+        <input type="text" name="token" value="" required>
+    </label>
+    <p><input type="submit" value="Enter"/>
+    </p></form>
+<p>{% for msg in get_flashed_messages() %}
+    <div>{{ msg }}</div>
+{% endfor %}
+</body>
+</html>
