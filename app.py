@@ -1,12 +1,14 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func
 from flask_migrate import Migrate
+from werkzeug.utils import secure_filename
+from datetime import datetime
 from hashlib import sha256
 import secrets
-from datetime import datetime
-from werkzeug.utils import secure_filename
+import io
 
 import constants
 
@@ -39,6 +41,7 @@ class Commit(db.Model):
     message = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
     files = db.relationship('File', backref='commit', lazy=True)
 
+    # TODO: implement commit SHA
     def __repr__(self):
         return f'Commit with message {self.message} was created at {self.created_at}'
 
@@ -49,6 +52,7 @@ class File(db.Model):
     filename = db.Column(db.String(128), nullable=False)
     data = db.Column(db.LargeBinary, nullable=False)
 
+    # TODO: implement file hash
     def __repr__(self):
         return f'File with name {self.filename} was created at {self.commit.created_at}'
 
@@ -98,8 +102,29 @@ def generate():
 
 @app.route('/rep/<token>')
 def rep(token):
-    abort_if_token_nonexistent(token)
-    return f'got into rep\ntoken: {token}'
+    t, exists = check_if_token_exists(token, True)
+    if not exists:
+        abort(404, message='Token does not exist')
+    c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
+        token=t).group_by(
+        File.filename).order_by(File.filename).all()
+    commits = []
+    for item in c:
+        file_id = item[0]
+        m = db.session.query(Commit.message).join(File).filter_by(id=file_id).first()
+        m = m[0].strip()
+        commits.append(tuple(list(item) + [m]))
+    return render_template('rep.html', title='Explore repo', token=token, commits=commits)
+
+
+@app.route('/rep/<token>/<filename>')
+def file_preview(token, filename):
+    t, exists = check_if_token_exists(token, True)
+    # TODO: create a function that either returns token object either aborts request
+    if not exists:
+        abort(404, message='Token does not exist')
+    data = db.session.query(File.data).filter_by(filename=filename).join(Commit).filter_by(token=t).first()
+    return send_file(io.BytesIO(data.data), mimetype='image/png')
 
 
 class ApiGetRep(Resource):
@@ -133,6 +158,7 @@ class ApiCommit(Resource):
             db.session.rollback()
             db.session.delete(c)
         db.session.commit()
+        return {"message": "OK"}, 201
 
 
 api.add_resource(ApiGetRep, "/api/<string:token>")

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+</head>
+<body>
+<div>you got in {{ token }} repository</div>
+<p>
+    {% for c in commits %}
+        <a href={{ url_for('file_preview', token=token, filename=c[1]) }}>{{ c[1] }}</a>
+        {{ c[2].strftime('%Y-%m-%d %H:%M:%S') }} note: {{ c[3] }}<p>
+    {% endfor %}
+</body>
+</html>
