@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import SQLAlchemyError
 from flask_migrate import Migrate
 from hashlib import sha256
 import secrets
@@ -36,6 +37,7 @@ class Commit(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     token_id = db.Column(db.Integer, db.ForeignKey('token.id'), nullable=False)
     message = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
+    files = db.relationship('File', backref='commit', lazy=True)
 
     def __repr__(self):
         return f'Commit with message {self.message} was created at {self.created_at}'
@@ -46,6 +48,9 @@ class File(db.Model):
     commit_id = db.Column(db.Integer, db.ForeignKey('commit.id'), nullable=False)
     filename = db.Column(db.String(128), nullable=False)
     data = db.Column(db.LargeBinary, nullable=False)
+
+    def __repr__(self):
+        return f'File with name {self.filename} was created at {self.commit.created_at}'
 
 
 def generate_user_token(n):
@@ -102,12 +107,6 @@ class ApiGetRep(Resource):
         return {'exists': check_if_token_exists(token, False)}
 
 
-'''
-commit_args = reqparse.RequestParser()
-commit_args.add_argument('message', type=str, help='There must be a commit note')
-commit_args.add_argument('files', type=datastructures.FileStorage, location='files')'''
-
-
 class ApiCommit(Resource):
     def post(self, token):
         t, exists = check_if_token_exists(token, True)
@@ -116,12 +115,24 @@ class ApiCommit(Resource):
         message = request.form.get('message', '')
         if len(message) > constants.COMMIT_MESSAGE_LENGTH:
             abort(412, message='Commit message must be no longer than 255 letters')
-        c = Commit(token=t, message=message)
         if not request.files:
             abort(400, message='No files provided to commit')
-        for file in request.files:
-            file = secure_filename(request.files[file])
-            print(file.filename)
+        c = Commit(token=t, message=message)
+        db.session.add(c)
+        db.session.commit()  # commiting to get commit id
+        try:
+            for file in request.files:
+                file = request.files[file]
+                filename = secure_filename(file.filename)
+                file_handle = file.stream.read()
+                f = File(commit=c, filename=filename, data=file_handle)
+                db.session.add(f)
+        except SQLAlchemyError as exc:
+            # TODO: implement logging
+            print(exc)
+            db.session.rollback()
+            db.session.delete(c)
+        db.session.commit()
 
 
 api.add_resource(ApiGetRep, "/api/<string:token>")
