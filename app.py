@@ -25,6 +25,31 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
 
+def generate_user_token(n):
+    return secrets.token_urlsafe(n)
+
+
+def generate_token_hash(token):
+    return sha256(token.encode('utf-8')).hexdigest()
+
+
+def check_if_token_exists(token):
+    token_hash = generate_token_hash(token)
+    t = Token.query.filter_by(token_hash=token_hash).first()
+    if t is None:
+        return False
+    else:
+        return t
+
+
+def abort_if_token_nonexistent(token):
+    t = check_if_token_exists(token)
+    if not t:
+        abort(404, message='Token does not exist!')
+    else:
+        return t
+
+
 class Token(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
@@ -40,6 +65,8 @@ class Commit(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     token_id = db.Column(db.Integer, db.ForeignKey('token.id'), nullable=False)
     message = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
+    hash = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH),
+                     default=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)))
     files = db.relationship('File', backref='commit', lazy=True)
 
     # TODO: implement commit SHA
@@ -58,33 +85,11 @@ class File(db.Model):
         return f'File with name {self.filename} was created at {self.commit.created_at}'
 
 
-def generate_user_token(n):
-    return secrets.token_urlsafe(n)
-
-
-def generate_token_hash(token):
-    return sha256(token.encode('utf-8')).hexdigest()
-
-
-def check_if_token_exists(token, obj):
-    token_hash = generate_token_hash(token)
-    t = Token.query.filter_by(token_hash=token_hash).first()
-    if obj:
-        return t, t is not None
-    else:
-        return t is not None
-
-
-def abort_if_token_nonexistent(token):
-    if not check_if_token_exists(token, False):
-        abort(404, message='Token does not exist')
-
-
 @app.route('/')
 def index():
     if request.args.get('token', 0):
         token = request.args['token']
-        if check_if_token_exists(token, False):
+        if check_if_token_exists(token):
             return redirect(url_for('rep', token=token))
         else:
             flash('Token not found')
@@ -101,29 +106,30 @@ def generate():
     return render_template('generate.html', title='Token generated', token=token)
 
 
-@app.route('/rep/<token>')
-def rep(token):
-    t, exists = check_if_token_exists(token, True)
-    if not exists:
-        abort(404, message='Token does not exist')
+@app.route('/<token>/commits/<sha>')
+@app.route('/<token>')
+def rep(token, sha=None):
+    t = abort_if_token_nonexistent(token)
     c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
         token=t).group_by(
         File.filename).order_by(File.filename).all()
-    commits = []
+    if not c:
+        return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
+    files = []
     for item in c:
         file_id = item[0]
         m = db.session.query(Commit.message).join(File).filter_by(id=file_id).first()
         m = m[0].strip()
-        commits.append(tuple(list(item) + [m]))
-    return render_template('rep.html', title='Explore repo', token=token, commits=commits)
+        files.append(tuple(list(item) + [m]))
+    last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
+    last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
+    return render_template('rep.html', title='Explore repository', token=token, commits=files,
+                           last_commit_hash=last_commit_hash)
 
 
-@app.route('/rep/<token>/<filename>')
+@app.route('/<token>/<filename>')
 def file_preview(token, filename):
-    t, exists = check_if_token_exists(token, True)
-    # TODO: create a function that either returns token object either aborts request
-    if not exists:
-        abort(404, message='Token does not exist')
+    t = abort_if_token_nonexistent(token)
     data = db.session.query(File.data).filter_by(filename=filename).join(Commit).filter_by(token=t).first()
     mimetype = mimetypes.guess_type(filename)[0]
     if mimetype.startswith('text'):
@@ -131,9 +137,12 @@ def file_preview(token, filename):
     return send_file(io.BytesIO(data.data), mimetype=mimetype)
 
 
-@app.route('/rep/<token>/commits')
-def list_commits(token, filename):
-    pass
+@app.route('/<token>/commits')
+def list_commits(token):
+    t = abort_if_token_nonexistent(token)
+    commits = Commit.query.filter_by(token=t).all()
+    print([i.__dict__ for i in commits])
+    return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
 
 @app.errorhandler(404)
@@ -143,14 +152,13 @@ def not_found(exc):
 
 class ApiGetRep(Resource):
     def get(self, token):
-        return {'exists': check_if_token_exists(token, False)}
+        exists = check_if_token_exists(token)
+        return {'exists': True if exists else exists}
 
 
 class ApiCommit(Resource):
     def post(self, token):
-        t, exists = check_if_token_exists(token, True)
-        if not exists:
-            abort(404, message='Token does not exist')
+        t = abort_if_token_nonexistent(token)
         message = request.form.get('message', '')
         if len(message) > constants.COMMIT_MESSAGE_LENGTH:
             abort(412, message='Commit message must be no longer than 255 letters')

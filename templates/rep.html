@@ -5,11 +5,13 @@
     <title>{{ title }}</title>
 </head>
 <body>
-<div>you got in {{ token }} repository</div>
+<div>{{ token }} repository</div>
+<div>You are exploring {{ last_commit_hash }} commit</div>
 <p>
     {% for c in commits %}
         <a href={{ url_for('file_preview', token=token, filename=c[1]) }}>{{ c[1] }}</a>
         {{ c[2].strftime('%Y-%m-%d %H:%M:%S') }} note: {{ c[3] }}<p>
     {% endfor %}
+    <a href={{ url_for('list_commits', token=token) }}>Show all commits</a>
 </body>
 </html>
