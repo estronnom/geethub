@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
@@ -7,6 +7,7 @@ from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
 from datetime import datetime
 from hashlib import sha256
+import mimetypes
 import secrets
 import io
 
@@ -124,7 +125,20 @@ def file_preview(token, filename):
     if not exists:
         abort(404, message='Token does not exist')
     data = db.session.query(File.data).filter_by(filename=filename).join(Commit).filter_by(token=t).first()
-    return send_file(io.BytesIO(data.data), mimetype='image/png')
+    mimetype = mimetypes.guess_type(filename)[0]
+    if mimetype.startswith('text'):
+        mimetype = 'text/plain'
+    return send_file(io.BytesIO(data.data), mimetype=mimetype)
+
+
+@app.route('/rep/<token>/commits')
+def list_commits(token, filename):
+    pass
+
+
+@app.errorhandler(404)
+def not_found(exc):
+    return make_response('Not found!', 404)
 
 
 class ApiGetRep(Resource):
