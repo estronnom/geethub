@@ -6,10 +6,12 @@ from sqlalchemy import func
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
 from datetime import datetime
-from hashlib import sha256
+from hashlib import sha256, sha1
+import zlib
 import mimetypes
 import secrets
 import io
+import sys
 
 import constants
 
@@ -65,8 +67,7 @@ class Commit(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     token_id = db.Column(db.Integer, db.ForeignKey('token.id'), nullable=False)
     message = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
-    hash = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH),
-                     default=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)))
+    hash = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
     files = db.relationship('File', backref='commit', lazy=True)
 
     # TODO: implement commit SHA
@@ -79,6 +80,7 @@ class File(db.Model):
     commit_id = db.Column(db.Integer, db.ForeignKey('commit.id'), nullable=False)
     filename = db.Column(db.String(128), nullable=False)
     data = db.Column(db.LargeBinary, nullable=False)
+    hash = db.Column(db.String(40))
 
     # TODO: implement file hash
     def __repr__(self):
@@ -90,7 +92,7 @@ def index():
     if request.args.get('token', 0):
         token = request.args['token']
         if check_if_token_exists(token):
-            return redirect(url_for('rep', token=token))
+            return redirect(url_for('checkout', token=token))
         else:
             flash('Token not found')
     return render_template('index.html', title='Main')
@@ -108,11 +110,18 @@ def generate():
 
 @app.route('/<token>/commits/<sha>')
 @app.route('/<token>')
-def rep(token, sha=None):
+def checkout(token, sha=None):
     t = abort_if_token_nonexistent(token)
-    c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
-        token=t).group_by(
-        File.filename).order_by(File.filename).all()
+    if sha:
+        # created_at = Commit.query.filter_by(token=t).like(f'{sha}%').first()
+        created_at = db.session.query(Commit.created_at).filter_by(token=t).filter(Commit.hash.like(f'{sha}%')).first()
+        c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
+            token=t).filter(Commit.created_at <= created_at.created_at).group_by(
+            File.filename).order_by(File.filename).all()
+    else:
+        c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
+            token=t).group_by(
+            File.filename).order_by(File.filename).all()
     if not c:
         return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
     files = []
@@ -124,24 +133,24 @@ def rep(token, sha=None):
     last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
     last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
     return render_template('rep.html', title='Explore repository', token=token, commits=files,
-                           last_commit_hash=last_commit_hash)
+                           last_commit_hash=sha if sha else last_commit_hash)
 
 
 @app.route('/<token>/<filename>')
 def file_preview(token, filename):
     t = abort_if_token_nonexistent(token)
     data = db.session.query(File.data).filter_by(filename=filename).join(Commit).filter_by(token=t).first()
+    data = zlib.decompress(data.data)
     mimetype = mimetypes.guess_type(filename)[0]
     if mimetype.startswith('text'):
         mimetype = 'text/plain'
-    return send_file(io.BytesIO(data.data), mimetype=mimetype)
+    return send_file(io.BytesIO(data), mimetype=mimetype)
 
 
 @app.route('/<token>/commits')
 def list_commits(token):
     t = abort_if_token_nonexistent(token)
-    commits = Commit.query.filter_by(token=t).all()
-    print([i.__dict__ for i in commits])
+    commits = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).all()
     return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
 
@@ -164,7 +173,8 @@ class ApiCommit(Resource):
             abort(412, message='Commit message must be no longer than 255 letters')
         if not request.files:
             abort(400, message='No files provided to commit')
-        c = Commit(token=t, message=message)
+        c = Commit(token=t, message=message,
+                   hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)))
         db.session.add(c)
         db.session.commit()  # commiting to get commit id
         try:
@@ -172,11 +182,12 @@ class ApiCommit(Resource):
                 file = request.files[file]
                 filename = secure_filename(file.filename)
                 file_handle = file.stream.read()
-                f = File(commit=c, filename=filename, data=file_handle)
+                file_hash = sha1(file_handle.encode('utf-8')).hexdigest()
+                file_handle = zlib.compress(file_handle)
+                f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
                 db.session.add(f)
         except SQLAlchemyError as exc:
             # TODO: implement logging
-            print(exc)
             db.session.rollback()
             db.session.delete(c)
         db.session.commit()

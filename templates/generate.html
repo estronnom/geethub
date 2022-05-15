@@ -6,7 +6,7 @@
 </head>
 <body>
 <h1>{{ token }}</h1>
-<form action={{ url_for('rep', token = token) }}>
+<form action={{ url_for('checkout', token = token) }}>
     <input type="submit" value="Proceed"/>
 </form>
 </body>
