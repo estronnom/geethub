@@ -51,6 +51,15 @@ def abort_if_token_nonexistent(token):
         return t
 
 
+def checkout_filelist(token_object, sha):
+    created_at = db.session.query(Commit.created_at).filter_by(token=token_object).filter(
+        Commit.hash.like(f'{sha}%')).first()
+    c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
+        token=token_object).filter(Commit.created_at <= created_at.created_at).group_by(
+        File.filename).order_by(File.filename).all()
+    return c
+
+
 class Token(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
@@ -69,7 +78,6 @@ class Commit(db.Model):
     hash = db.Column(db.String(constants.COMMIT_MESSAGE_LENGTH))
     files = db.relationship('File', backref='commit', lazy=True)
 
-    # TODO: implement commit SHA
     def __repr__(self):
         return f'Commit with message {self.message} was created at {self.created_at}'
 
@@ -81,7 +89,6 @@ class File(db.Model):
     data = db.Column(db.LargeBinary, nullable=False)
     hash = db.Column(db.String(40))
 
-    # TODO: implement file hash
     def __repr__(self):
         return f'File with name {self.filename} was created at {self.commit.created_at}'
 
@@ -112,11 +119,7 @@ def generate():
 def checkout(token, sha=None):
     t = abort_if_token_nonexistent(token)
     if sha:
-        # created_at = Commit.query.filter_by(token=t).like(f'{sha}%').first()
-        created_at = db.session.query(Commit.created_at).filter_by(token=t).filter(Commit.hash.like(f'{sha}%')).first()
-        c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
-            token=t).filter(Commit.created_at <= created_at.created_at).group_by(
-            File.filename).order_by(File.filename).all()
+        c = checkout_filelist(t, sha)
     else:
         c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
             token=t).group_by(
@@ -175,14 +178,18 @@ class ApiCommit(Resource):
         c = Commit(token=t, message=message,
                    hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)))
         db.session.add(c)
-        db.session.commit()  # commiting to get commit id
+        # db.session.commit()  # commiting to get commit id
         try:
             for file in request.files:
                 file = request.files[file]
                 filename = secure_filename(file.filename)
                 file_handle = file.stream.read()
                 file_hash = sha1(file_handle).hexdigest()
-                file_handle = zlib.compress(file_handle)
+                f = db.session.query(File.hash).join(Commit).filter_by(token=t).filter(
+                    File.filename == filename).order_by(
+                    Commit.created_at.desc()).first()
+                if f and f.hash == file_hash:
+                    continue
                 f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
                 db.session.add(f)
         except SQLAlchemyError as exc:
@@ -193,8 +200,38 @@ class ApiCommit(Resource):
         return {"message": "OK"}, 201
 
 
+class ApiList(Resource):
+    def get(self, token):
+        t = abort_if_token_nonexistent(token)
+        c = Commit.query.filter_by(token=t).all()
+        if not c:
+            return {'message': 'Repository is empty!'}, 404
+        else:
+            response_json = {}
+        for commit in c:
+            filelist = checkout_filelist(t, commit.hash)
+            filelist = [file.filename for file in filelist]
+            response_json[commit.hash] = {'message': commit.message, 'filelist': filelist}
+        return response_json, 200
+
+
+class ApiPull(Resource):
+    def get(self, token):
+        t = abort_if_token_nonexistent(token)
+        return
+
+
+class ApiCheckout(Resource):
+    def get(self, token):
+        t = abort_if_token_nonexistent(token)
+        return
+
+
 api.add_resource(ApiGetRep, "/api/<string:token>")
 api.add_resource(ApiCommit, "/api/<string:token>/commit")
+api.add_resource(ApiList, "/api/<string:token>/list")
+api.add_resource(ApiPull, "/api/<string:token>/pull")
+api.add_resource(ApiCheckout, "/api/<string:token>/checkout/<string:commit>")
 
 if __name__ == '__main__':
     app.run(debug=True)
