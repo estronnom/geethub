@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 from datetime import datetime
 from hashlib import sha256, sha1
 import zlib
+import zipfile
 import mimetypes
 import secrets
 import io
@@ -51,13 +52,29 @@ def abort_if_token_nonexistent(token):
         return t
 
 
-def checkout_filelist(token_object, sha):
-    created_at = db.session.query(Commit.created_at).filter_by(token=token_object).filter(
+def checkout_filelist(t, sha):
+    created_at = db.session.query(Commit.created_at).filter_by(token=t).filter(
         Commit.hash.like(f'{sha}%')).first()
     c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
-        token=token_object).filter(Commit.created_at <= created_at.created_at).group_by(
+        token=t).filter(Commit.created_at <= created_at.created_at).group_by(
         File.filename).order_by(File.filename).all()
     return c
+
+
+def pull_filelist(t):
+    c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
+        token=t).group_by(
+        File.filename).order_by(File.filename).all()
+    return c
+
+
+def generate_zip(filelist):
+    with zipfile.ZipFile('Pull.zip', 'w') as zip_response:
+        for file in filelist:
+            file_bytes = File.query.filter_by(id=file[0]).first().data
+            file_bytes = zlib.decompress(file_bytes)
+            zip_response.writestr(file[1], file_bytes)
+        return zip_response
 
 
 class Token(db.Model):
@@ -121,9 +138,7 @@ def checkout(token, sha=None):
     if sha:
         c = checkout_filelist(t, sha)
     else:
-        c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
-            token=t).group_by(
-            File.filename).order_by(File.filename).all()
+        c = pull_filelist(t)
     if not c:
         return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
     files = []
@@ -190,6 +205,7 @@ class ApiCommit(Resource):
                     Commit.created_at.desc()).first()
                 if f and f.hash == file_hash:
                     continue
+                file_handle = zlib.compress(file_handle)
                 f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
                 db.session.add(f)
         except SQLAlchemyError as exc:
@@ -218,13 +234,21 @@ class ApiList(Resource):
 class ApiPull(Resource):
     def get(self, token):
         t = abort_if_token_nonexistent(token)
-        return
+        filelist = pull_filelist(t)
+        if not filelist:
+            return {'message': 'Repository is empty!'}, 404
+        zip_response = generate_zip(filelist)
+        return send_file(zip_response, mimetype='application/zip')
 
 
 class ApiCheckout(Resource):
-    def get(self, token):
+    def get(self, token, commit):
         t = abort_if_token_nonexistent(token)
-        return
+        filelist = checkout_filelist(t, commit)
+        if not filelist:
+            return {'message': 'Repository is empty!'}, 404
+        zip_response = generate_zip(filelist)
+        return send_file(zip_response, mimetype='application/zip')
 
 
 api.add_resource(ApiGetRep, "/api/<string:token>")

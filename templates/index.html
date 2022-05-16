@@ -5,7 +5,7 @@
     <title>{{ title }}</title>
 </head>
 <body>
-<a href="/generate">Generate new token</a>
+<a href= {{ url_for('generate') }}>Generate new token</a>
 <form action="/" method="get">
     <p><label>Enter your token</label><label>
         <input type="text" name="token" value="" required>
