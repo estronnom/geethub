@@ -11,7 +11,6 @@ import zlib
 import mimetypes
 import secrets
 import io
-import sys
 
 import constants
 
@@ -182,7 +181,7 @@ class ApiCommit(Resource):
                 file = request.files[file]
                 filename = secure_filename(file.filename)
                 file_handle = file.stream.read()
-                file_hash = sha1(file_handle.encode('utf-8')).hexdigest()
+                file_hash = sha1(file_handle).hexdigest()
                 file_handle = zlib.compress(file_handle)
                 f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
                 db.session.add(f)
