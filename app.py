@@ -80,6 +80,15 @@ def generate_zip(file_list, zip_name):
         return zip_response
 
 
+def generate_token():
+    token = generate_user_token(constants.TOKEN_BYTES_LENGTH)
+    token_hash = generate_token_hash(token)
+    t = Token(token_hash=token_hash)
+    db.session.add(t)
+    db.session.commit()
+    return t, token
+
+
 class Token(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
@@ -127,11 +136,7 @@ def index():
 
 @app.route('/generate')
 def generate():
-    token = generate_user_token(constants.TOKEN_BYTES_LENGTH)
-    token_hash = generate_token_hash(token)
-    t = Token(token_hash=token_hash)
-    db.session.add(t)
-    db.session.commit()
+    token = generate_token()
     return render_template('generate.html', title='Token generated', token=token)
 
 
@@ -156,6 +161,13 @@ def checkout(token, sha=None):
     return render_template('rep.html', title='Explore repository', token=token, commits=files,
                            last_commit_hash=sha if sha else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
                            size=ceil(t.current_size / (1024 * 1024)))
+
+
+@app.route('/<token>/clone/<commit>')
+def clone(token, commit):
+    abort_if_token_nonexistent()
+    token_object, token_string = generate_token()
+    return redirect(url_for('checkout', token=token_string))
 
 
 @app.route('/<token>/<filename>')

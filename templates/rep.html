@@ -14,5 +14,12 @@
     {% endfor %}
     <a href={{ url_for('list_commits', token=token) }}>Show all commits</a>
 <div>Used {{ size }} of {{ max_size }} MB</div>
+<p>
+<div>
+    To clone this repository at the state of {{ last_commit_hash }} commit press
+    <form action={{ url_for('clone', token=token, commit=last_commit_hash) }}>
+        <input type="submit" value="Clone"/>
+    </form>
+</div>
 </body>
 </html>
