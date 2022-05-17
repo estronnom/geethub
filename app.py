@@ -89,6 +89,12 @@ def generate_token():
     return t, token
 
 
+def update_token_size(token_object, files_to_add):
+    new_size = sum((sys.getsizeof(item.data) for item in files_to_add))
+    token_object.current_size = new_size
+    db.session.commit()
+
+
 class Token(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
@@ -167,23 +173,31 @@ def checkout(token, sha=None):
 def clone(token, commit):
     t = abort_if_token_nonexistent(token)
     token_object, token_string = generate_token()
-    commit_object = Commit.query.filter_by(token=t).filter(
+    initial_commit = Commit.query.filter_by(token=t).filter(
         Commit.hash.like(f"{commit}%")).first()
+    new_commit = Commit(hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)),
+                        message=initial_commit.message, token_id=token_object.id)
+    db.session.add(new_commit)
+    db.session.commit()
     filelist = checkout_filelist(t, commit)
-    # target_commits = Commit.query.filter_by(token=t).filter(Commit.created_at <= commit_created_at).order_by(
-    #     Commit.created_at.desc()).first()
-    # file_list = checkout_filelist(t, commit)
-    # print(file_list)
-    # for commit in target_commits:
-    #     db.session.expunge(commit)
-    #     make_transient(commit)
-    #     commit.token_id = token_object.id
-    #     commit.hash = generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH))
-    #     commit.created_at = datetime.now()
-    #     del commit.id
-    #     db.session.add(commit)
-    #     db.session.commit()
-    # return 'biba'
+    files_to_add = []
+    try:
+        for file in filelist:
+            file = File.query.filter_by(id=file[0]).first()
+            db.session.expunge(file)
+            make_transient(file)
+            del file.id
+            file.commit_id = new_commit.id
+            files_to_add.append(file)
+    except SQLAlchemyError:
+        db.session.delete(new_commit)
+        db.session.commit()
+        return 'Internal error', 500
+    else:
+        db.session.add_all(files_to_add)
+        db.session.commit()
+        update_token_size(token_object, files_to_add)
+        return redirect(url_for('checkout', token=token_string)), 302
 
 
 @app.route('/<token>/<filename>')
