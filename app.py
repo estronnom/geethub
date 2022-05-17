@@ -1,11 +1,10 @@
-import sys
-
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
 from flask_migrate import Migrate
+from sqlalchemy.orm import make_transient
 from werkzeug.utils import secure_filename
 from datetime import datetime
 from hashlib import sha256, sha1
@@ -14,6 +13,7 @@ import zipfile
 import mimetypes
 import secrets
 from math import ceil
+import sys
 import io
 
 import constants
@@ -55,9 +55,9 @@ def abort_if_token_nonexistent(token):
         return t
 
 
-def checkout_filelist(t, sha):
+def checkout_filelist(t, commit):
     created_at = db.session.query(Commit.created_at).filter_by(token=t).filter(
-        Commit.hash.like(f'{sha}%')).first()
+        Commit.hash.like(f'{commit}%')).first()
     c = db.session.query(func.max(File.id), File.filename, func.max(Commit.created_at)).join(Commit).filter_by(
         token=t).filter(Commit.created_at <= created_at.created_at).group_by(
         File.filename).order_by(File.filename).all()
@@ -97,7 +97,7 @@ class Token(db.Model):
     current_size = db.Column(db.BigInteger, default=0)
 
     def __repr__(self):
-        return f'Token with id {self.id} was created at {self.created_at}'
+        return f'Token {self.__dict__}'
 
 
 class Commit(db.Model):
@@ -109,7 +109,7 @@ class Commit(db.Model):
     files = db.relationship('File', backref='commit', lazy=True)
 
     def __repr__(self):
-        return f'Commit with message {self.message} was created at {self.created_at}'
+        return f'Commit {self.__dict__}'
 
 
 class File(db.Model):
@@ -120,7 +120,7 @@ class File(db.Model):
     hash = db.Column(db.String(40))
 
     def __repr__(self):
-        return f'File with name {self.filename} was created at {self.commit.created_at}'
+        return f'File {self.__dict__}'
 
 
 @app.route('/')
@@ -165,9 +165,25 @@ def checkout(token, sha=None):
 
 @app.route('/<token>/clone/<commit>')
 def clone(token, commit):
-    abort_if_token_nonexistent()
+    t = abort_if_token_nonexistent(token)
     token_object, token_string = generate_token()
-    return redirect(url_for('checkout', token=token_string))
+    commit_object = Commit.query.filter_by(token=t).filter(
+        Commit.hash.like(f"{commit}%")).first()
+    filelist = checkout_filelist(t, commit)
+    # target_commits = Commit.query.filter_by(token=t).filter(Commit.created_at <= commit_created_at).order_by(
+    #     Commit.created_at.desc()).first()
+    # file_list = checkout_filelist(t, commit)
+    # print(file_list)
+    # for commit in target_commits:
+    #     db.session.expunge(commit)
+    #     make_transient(commit)
+    #     commit.token_id = token_object.id
+    #     commit.hash = generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH))
+    #     commit.created_at = datetime.now()
+    #     del commit.id
+    #     db.session.add(commit)
+    #     db.session.commit()
+    # return 'biba'
 
 
 @app.route('/<token>/<filename>')
