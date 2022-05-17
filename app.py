@@ -201,6 +201,7 @@ class ApiCommit(Resource):
         db.session.commit()
         file_list = []
         commit_size = 0
+        response = None
         try:
             for file in request.files:
                 file = request.files[file]
