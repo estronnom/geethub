@@ -1,3 +1,5 @@
+import sys
+
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
@@ -11,6 +13,7 @@ import zlib
 import zipfile
 import mimetypes
 import secrets
+from math import ceil
 import io
 
 import constants
@@ -68,9 +71,9 @@ def pull_filelist(t):
     return c
 
 
-def generate_zip(filelist):
-    with zipfile.ZipFile('Pull.zip', 'w') as zip_response:
-        for file in filelist:
+def generate_zip(file_list, zip_name):
+    with zipfile.ZipFile(zip_name, 'w') as zip_response:
+        for file in file_list:
             file_bytes = File.query.filter_by(id=file[0]).first().data
             file_bytes = zlib.decompress(file_bytes)
             zip_response.writestr(file[1], file_bytes)
@@ -82,6 +85,7 @@ class Token(db.Model):
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     commits = db.relationship('Commit', backref='token', lazy=True)
+    current_size = db.Column(db.BigInteger, default=0)
 
     def __repr__(self):
         return f'Token with id {self.id} was created at {self.created_at}'
@@ -150,7 +154,8 @@ def checkout(token, sha=None):
     last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
     last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
     return render_template('rep.html', title='Explore repository', token=token, commits=files,
-                           last_commit_hash=sha if sha else last_commit_hash)
+                           last_commit_hash=sha if sha else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
+                           size=ceil(t.current_size / (1024 * 1024)))
 
 
 @app.route('/<token>/<filename>')
@@ -193,7 +198,9 @@ class ApiCommit(Resource):
         c = Commit(token=t, message=message,
                    hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)))
         db.session.add(c)
-        # db.session.commit()  # commiting to get commit id
+        db.session.commit()
+        file_list = []
+        commit_size = 0
         try:
             for file in request.files:
                 file = request.files[file]
@@ -206,25 +213,38 @@ class ApiCommit(Resource):
                 if f and f.hash == file_hash:
                     continue
                 file_handle = zlib.compress(file_handle)
+                commit_size += sys.getsizeof(file_handle)
                 f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
-                db.session.add(f)
+                file_list.append(f)
+            new_size = t.current_size + commit_size
         except SQLAlchemyError as exc:
-            # TODO: implement logging
-            db.session.rollback()
             db.session.delete(c)
-        db.session.commit()
-        return {"message": "OK"}, 201
+            response = ({"message": "Internal error"}, 500)
+        else:
+            if not file_list:
+                db.session.delete(c)
+                response = ('Commit was rejected, no new files or changed detected', 409)
+            elif new_size > constants.MAX_REP_SIZE:
+                db.session.delete(c)
+                response = ('Repository size constraint is exceeded, delete some commits to proceed', 409)
+            else:
+                db.session.add_all(file_list)
+                t.current_size = new_size
+                response = ({"message": "OK"}, 201)
+        finally:
+            db.session.commit()
+            return response
 
 
 class ApiList(Resource):
     def get(self, token):
         t = abort_if_token_nonexistent(token)
-        c = Commit.query.filter_by(token=t).all()
-        if not c:
+        filelist = Commit.query.filter_by(token=t).all()
+        if not filelist:
             return {'message': 'Repository is empty!'}, 404
         else:
             response_json = {}
-        for commit in c:
+        for commit in filelist:
             filelist = checkout_filelist(t, commit.hash)
             filelist = [file.filename for file in filelist]
             response_json[commit.hash] = {'message': commit.message, 'filelist': filelist}
@@ -237,7 +257,7 @@ class ApiPull(Resource):
         filelist = pull_filelist(t)
         if not filelist:
             return {'message': 'Repository is empty!'}, 404
-        zip_response = generate_zip(filelist)
+        zip_response = generate_zip(filelist, f'{token[:constants.HASH_OFFSET]}.zip')
         return send_file(zip_response, mimetype='application/zip')
 
 
@@ -246,8 +266,8 @@ class ApiCheckout(Resource):
         t = abort_if_token_nonexistent(token)
         filelist = checkout_filelist(t, commit)
         if not filelist:
-            return {'message': 'Repository is empty!'}, 404
-        zip_response = generate_zip(filelist)
+            return {'message': 'Repository is empty!'}, 204
+        zip_response = generate_zip(filelist, f'{token[:constants.HASH_OFFSET]}_{commit[:constants.HASH_OFFSET]}.zip')
         return send_file(zip_response, mimetype='application/zip')
 
 

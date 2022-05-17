@@ -13,5 +13,6 @@
         {{ c[2].strftime('%Y-%m-%d %H:%M:%S') }} note: {{ c[3] }}<p>
     {% endfor %}
     <a href={{ url_for('list_commits', token=token) }}>Show all commits</a>
+<div>Used {{ size }} of {{ max_size }} MB</div>
 </body>
 </html>
