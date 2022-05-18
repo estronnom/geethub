@@ -8,16 +8,23 @@
 <div>{{ token }} repository</div>
 <div>You are exploring {{ last_commit_hash }} commit</div>
 <p>
-    {% for c in commits %}
-        <a href={{ url_for('file_preview', token=token, filename=c[1]) }}>{{ c[1] }}</a>
-        {{ c[2].strftime('%Y-%m-%d %H:%M:%S') }} note: {{ c[3] }}<p>
+    {% for f in files %}
+        <a href={{ url_for('file_preview', token=token, commit=last_commit_hash, filename=f[1]) }}>{{ f[1] }}</a>
+        {{ f[2].strftime('%Y-%m-%d %H:%M:%S') }}
+        {% if f[3] %}
+            note: {{ f[3] }}
+        {% endif %}
+        {% if f[-1] %}
+            <a href={{ url_for('changes', token=token, commit=last_commit_hash, filename=f[1]) }}>Show changes</a>
+        {% endif %}
+        <p>
     {% endfor %}
     <a href={{ url_for('list_commits', token=token) }}>Show all commits</a>
 <div>Used {{ size }} of {{ max_size }} MB</div>
 <p>
 <div>
     To clone this repository at the state of {{ last_commit_hash }} commit press
-    <form method='post' action={{ url_for('checkout', token=token, sha=last_commit_hash) }}>
+    <form method='post' action={{ url_for('checkout', token=token, commit=last_commit_hash) }}>
         <input type="submit" value="Clone"/>
     </form>
 </div>

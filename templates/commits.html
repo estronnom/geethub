@@ -8,7 +8,7 @@
 <div>{{ token }} commits:</div>
 <p>
     {% for c in commits %}
-        <a href={{ url_for('checkout', token=token, sha=c.hash[:6]) }}>{{ c.hash[:6] }} {{ c.created_at.strftime('%Y-%m-%d %H:%M:%S') }} {{ c.message }}</a>
+        <a href={{ url_for('checkout', token=token, commit=c.hash[:6]) }}>{{ c.hash[:6] }} {{ c.created_at.strftime('%Y-%m-%d %H:%M:%S') }} {{ c.message }}</a>
         <p>
     {% endfor %}
 </body>

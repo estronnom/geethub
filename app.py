@@ -143,7 +143,7 @@ def index():
 
 @app.route('/generate')
 def generate():
-    token = generate_token()
+    t, token = generate_token()
     return render_template('generate.html', title='Token generated', token=token)
 
 
@@ -174,7 +174,7 @@ def clone(t, commit):
         db.session.add_all(files_to_add)
         db.session.commit()
         update_token_size(token_object, files_to_add)
-        return redirect(url_for('checkout', token=token_string, sha=new_commit.hash[:constants.HASH_OFFSET])), 302
+        return redirect(url_for('checkout', token=token_string, commit=new_commit.hash[:constants.HASH_OFFSET])), 302
 
 
 @app.route('/<token>/')
@@ -183,26 +183,76 @@ def bare_checkout(token):
     sha = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
     if not sha:
         return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
-    return redirect(url_for('checkout', token=token, sha=sha.hash[:constants.HASH_OFFSET]))
+    return redirect(url_for('checkout', token=token, commit=sha.hash[:constants.HASH_OFFSET]))
 
 
-@app.route('/<token>/commits/<sha>', methods=['GET', 'POST'])
-def checkout(token, sha):
+@app.route('/<token>/commits/<commit>', methods=['GET', 'POST'])
+def checkout(token, commit):
     t = abort_if_token_nonexistent(token)
     if request.method == 'POST':
-        return clone(t, sha)
-    c = checkout_filelist(t, sha)
+        return clone(t, commit)
+    c = checkout_filelist(t, commit)
     files = []
     for item in c:
         file_id = item[0]
-        m = db.session.query(Commit.message).join(File).filter_by(id=file_id).first()
-        m = m[0].strip()
-        files.append(tuple(list(item) + [m]))
+        query = db.session.query(Commit, File).join(File).filter_by(id=file_id).first()
+        files.append(tuple(list(item) + [query.Commit.message, query.File.parent_id]))
     last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
     last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
-    return render_template('rep.html', title='Explore repository', token=token, commits=files,
-                           last_commit_hash=sha if sha else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
+    return render_template('rep.html', title='Explore repository', token=token, files=files,
+                           last_commit_hash=commit if commit else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
                            size=ceil(t.current_size / (1024 * 1024)))
+
+
+@app.route('/<token>/commits/<commit>/changes/<filename>')
+def changes(token, commit, filename):
+    t = abort_if_token_nonexistent(token)
+    if not mimetypes.guess_type(filename)[0].startswith('text'):
+        return 'Not a text file, differences cannot be shown', 500
+    file_object = db.session.query(File).join(Commit).filter_by(token=t).filter(Commit.hash.like(f"{commit}%")).filter(
+        File.filename == filename).order_by(Commit.created_at.desc()).first()
+    if not file_object or not file_object.parent_id:
+        abort(404, message='File not found or has no previous versions')
+    parent_file_object = File.query.filter_by(id=file_object.parent_id).first()
+    child_file_list = zlib.decompress(file_object.data).decode('utf-8').rstrip().split('\n')
+    parent_file_list = zlib.decompress(parent_file_object.data).decode('utf-8').rstrip().split('\n')
+    child_file_set = set(child_file_list)
+    parent_file_set = set(parent_file_list)
+    added_lines = child_file_set - parent_file_set
+    gone_lines = parent_file_set - child_file_set
+    child_greater = len(child_file_list) > len(parent_file_list)
+    max_list = child_file_list if child_greater else parent_file_list
+    max_set = added_lines if child_greater else gone_lines
+    symbol = ' +++' if child_greater else ' ---'
+    outcome = []
+    last_index = 0
+    child_appended = None
+    for i in range(min(len(child_file_list), len(parent_file_list))):
+        last_index = i
+        child_line = child_file_list[i]
+        parent_line = parent_file_list[i]
+        if child_line == parent_line:
+            outcome.append(child_line)
+            print('values are the same', child_line)
+            continue
+        if parent_line in gone_lines:
+            outcome.append(parent_line + ' ---')
+            print('parent line in gone lines', parent_line)
+        if child_line in added_lines:
+            child_appended = child_line
+            outcome.append(child_line + ' +++')
+            print('child line in added lines', child_line)
+        if child_line in child_file_set and child_line != child_appended:
+            outcome.append(child_line)
+            print('shit worked', child_line)
+    else:
+        for i in range(last_index + 1, len(max_list)):
+            line = max_list[i]
+            if line in max_set:
+                outcome.append(line + symbol)
+            else:
+                outcome.append(line)
+    return '<p>'.join(outcome)
 
 
 @app.route('/<token>/commits')
@@ -212,10 +262,12 @@ def list_commits(token):
     return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
 
-@app.route('/<token>/<filename>')
-def file_preview(token, filename):
+@app.route('/<token>/commits/<commit>/<filename>')
+def file_preview(token, commit, filename):
     t = abort_if_token_nonexistent(token)
-    data = db.session.query(File.data).filter_by(filename=filename).join(Commit).filter_by(token=t).first()
+    data = File.query.join(Commit).filter_by(token=t).filter(Commit.hash.like(f"{commit}%")).first()
+    if not data and not data.data:
+        abort(404, message='File not found!')
     data = zlib.decompress(data.data)
     mimetype = mimetypes.guess_type(filename)[0]
     if mimetype.startswith('text'):
@@ -259,8 +311,6 @@ class ApiCommit(Resource):
                 f = db.session.query(File).join(Commit).filter_by(token=t).filter(
                     File.filename == filename).order_by(
                     Commit.created_at.desc()).first()
-                print(type(f))
-                print(f)
                 if f and f.hash == file_hash:
                     continue
                 if f and f.hash != file_hash:
@@ -272,7 +322,6 @@ class ApiCommit(Resource):
             new_size = t.current_size + commit_size
         except SQLAlchemyError as exc:
             db.session.delete(c)
-            print('biba')
             response = ("Internal error", 500)
         else:
             if not file_list:
