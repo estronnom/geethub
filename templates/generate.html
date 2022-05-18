@@ -6,7 +6,7 @@
 </head>
 <body>
 <div>{{ token }}</div>
-<form action={{ url_for('checkout', token = token) }}>
+<form action={{ url_for('bare_checkout', token = token) }}>
     <input type="submit" value="Proceed"/>
 </form>
 </body>

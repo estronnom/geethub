@@ -17,7 +17,7 @@
 <p>
 <div>
     To clone this repository at the state of {{ last_commit_hash }} commit press
-    <form action={{ url_for('clone', token=token, commit=last_commit_hash) }}>
+    <form method='post' action={{ url_for('checkout', token=token, sha=last_commit_hash) }}>
         <input type="submit" value="Clone"/>
     </form>
 </div>

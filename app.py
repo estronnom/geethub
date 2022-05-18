@@ -134,7 +134,7 @@ def index():
     if request.args.get('token', 0):
         token = request.args['token']
         if check_if_token_exists(token):
-            return redirect(url_for('checkout', token=token))
+            return redirect(url_for('bare_checkout', token=token))
         else:
             flash('Token not found')
     return render_template('index.html', title='Main')
@@ -146,32 +146,7 @@ def generate():
     return render_template('generate.html', title='Token generated', token=token)
 
 
-@app.route('/<token>/commits/<sha>')
-@app.route('/<token>')
-def checkout(token, sha=None):
-    t = abort_if_token_nonexistent(token)
-    if sha:
-        c = checkout_filelist(t, sha)
-    else:
-        c = pull_filelist(t)
-    if not c:
-        return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
-    files = []
-    for item in c:
-        file_id = item[0]
-        m = db.session.query(Commit.message).join(File).filter_by(id=file_id).first()
-        m = m[0].strip()
-        files.append(tuple(list(item) + [m]))
-    last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
-    last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
-    return render_template('rep.html', title='Explore repository', token=token, commits=files,
-                           last_commit_hash=sha if sha else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
-                           size=ceil(t.current_size / (1024 * 1024)))
-
-
-@app.route('/<token>/clone/<commit>')
-def clone(token, commit):
-    t = abort_if_token_nonexistent(token)
+def clone(t, commit):
     token_object, token_string = generate_token()
     initial_commit = Commit.query.filter_by(token=t).filter(
         Commit.hash.like(f"{commit}%")).first()
@@ -197,7 +172,42 @@ def clone(token, commit):
         db.session.add_all(files_to_add)
         db.session.commit()
         update_token_size(token_object, files_to_add)
-        return redirect(url_for('checkout', token=token_string)), 302
+        return redirect(url_for('checkout', token=token_string, sha=new_commit.hash[:constants.HASH_OFFSET])), 302
+
+
+@app.route('/<token>/')
+def bare_checkout(token):
+    t = abort_if_token_nonexistent(token)
+    sha = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
+    if not sha:
+        return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
+    return redirect(url_for('checkout', token=token, sha=sha.hash[:constants.HASH_OFFSET]))
+
+
+@app.route('/<token>/commits/<sha>', methods=['GET', 'POST'])
+def checkout(token, sha):
+    t = abort_if_token_nonexistent(token)
+    if request.method == 'POST':
+        return clone(t, sha)
+    c = checkout_filelist(t, sha)
+    files = []
+    for item in c:
+        file_id = item[0]
+        m = db.session.query(Commit.message).join(File).filter_by(id=file_id).first()
+        m = m[0].strip()
+        files.append(tuple(list(item) + [m]))
+    last_commit = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
+    last_commit_hash = last_commit.hash[:constants.HASH_OFFSET]
+    return render_template('rep.html', title='Explore repository', token=token, commits=files,
+                           last_commit_hash=sha if sha else last_commit_hash, max_size=constants.MAX_REP_SIZE_MB,
+                           size=ceil(t.current_size / (1024 * 1024)))
+
+
+@app.route('/<token>/commits')
+def list_commits(token):
+    t = abort_if_token_nonexistent(token)
+    commits = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).all()
+    return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
 
 @app.route('/<token>/<filename>')
@@ -209,13 +219,6 @@ def file_preview(token, filename):
     if mimetype.startswith('text'):
         mimetype = 'text/plain'
     return send_file(io.BytesIO(data), mimetype=mimetype)
-
-
-@app.route('/<token>/commits')
-def list_commits(token):
-    t = abort_if_token_nonexistent(token)
-    commits = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).all()
-    return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
 
 @app.errorhandler(404)
