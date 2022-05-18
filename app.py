@@ -124,9 +124,10 @@ class File(db.Model):
     filename = db.Column(db.String(128), nullable=False)
     data = db.Column(db.LargeBinary, nullable=False)
     hash = db.Column(db.String(40))
+    parent_id = db.Column(db.Integer)
 
     def __repr__(self):
-        return f'File {self.__dict__}'
+        return f'File {self.id, self.commit_id, self.filename, self.hash, self.parent_id}'
 
 
 @app.route('/')
@@ -162,6 +163,7 @@ def clone(t, commit):
             db.session.expunge(file)
             make_transient(file)
             del file.id
+            del file.parent_id
             file.commit_id = new_commit.id
             files_to_add.append(file)
     except SQLAlchemyError:
@@ -249,23 +251,29 @@ class ApiCommit(Resource):
         response = None
         try:
             for file in request.files:
+                parent_id = None
                 file = request.files[file]
                 filename = secure_filename(file.filename)
                 file_handle = file.stream.read()
                 file_hash = sha1(file_handle).hexdigest()
-                f = db.session.query(File.hash).join(Commit).filter_by(token=t).filter(
+                f = db.session.query(File).join(Commit).filter_by(token=t).filter(
                     File.filename == filename).order_by(
                     Commit.created_at.desc()).first()
+                print(type(f))
+                print(f)
                 if f and f.hash == file_hash:
                     continue
+                if f and f.hash != file_hash:
+                    parent_id = f.id
                 file_handle = zlib.compress(file_handle)
                 commit_size += sys.getsizeof(file_handle)
-                f = File(commit=c, filename=filename, data=file_handle, hash=file_hash)
+                f = File(commit=c, filename=filename, data=file_handle, hash=file_hash, parent_id=parent_id)
                 file_list.append(f)
             new_size = t.current_size + commit_size
         except SQLAlchemyError as exc:
             db.session.delete(c)
-            response = ({"message": "Internal error"}, 500)
+            print('biba')
+            response = ("Internal error", 500)
         else:
             if not file_list:
                 db.session.delete(c)
