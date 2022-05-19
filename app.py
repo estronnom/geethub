@@ -147,9 +147,11 @@ def delete_token(token_object):
     commit_object = Commit.query.filter_by(token=token_object).all()
     try:
         for commit in commit_object:
-            File.query.filter_by(commit=commit_object).delete()
+            File.query.filter_by(commit=commit).delete()
             db.session.delete(commit)
-    except SQLAlchemyError:
+        db.session.delete(token_object)
+    except SQLAlchemyError as exc:
+        print(exc)
         db.session.rollback()
         return False
     else:
@@ -214,7 +216,7 @@ def bare_checkout(token):
     t = abort_if_token_nonexistent(token)
     sha = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).first()
     if not sha:
-        return f'Your repository is empty<p>Upload some files via post request<p>Token: {token}'
+        return redirect(url_for('list_commits', token=token))
     return redirect(url_for('checkout', token=token, commit=sha.hash[:constants.HASH_OFFSET]))
 
 
@@ -299,7 +301,7 @@ def list_commits(token):
     if request.method == 'POST':
         if request.form.get('delete_validation', False) and request.form['delete_validation'] == f"delete {token[:6]}":
             if delete_token(t):
-                return redirect('index')
+                return redirect(url_for('index')), 302
             else:
                 return 'Internal error...', 500
         else:
