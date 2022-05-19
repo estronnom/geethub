@@ -23,9 +23,9 @@
 <div>Used {{ size }} of {{ max_size }} MB</div>
 <p>
 <div>
-    To clone this repository at the state of {{ last_commit_hash }} commit press
     <form method='post' action={{ url_for('checkout', token=token, commit=last_commit_hash) }}>
-        <input type="submit" value="Clone"/>
+        <input type="submit" name="clone" value="Clone {{ last_commit_hash }}"/>
+        <input type="submit" name="delete" value="Delete {{ last_commit_hash }}"/>
     </form>
 </div>
 </body>

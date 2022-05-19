@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response, session
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +13,7 @@ import zipfile
 import mimetypes
 import secrets
 from math import ceil
+import time
 import sys
 import io
 
@@ -95,6 +96,68 @@ def update_token_size(token_object, files_to_add):
     db.session.commit()
 
 
+def clone(t, commit):
+    token_object, token_string = generate_token()
+    initial_commit = Commit.query.filter_by(token=t).filter(
+        Commit.hash.like(f"{commit}%")).first()
+    new_commit = Commit(hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)),
+                        message=initial_commit.message, token_id=token_object.id)
+    db.session.add(new_commit)
+    db.session.commit()
+    filelist = checkout_filelist(t, commit)
+    files_to_add = []
+    try:
+        for file in filelist:
+            file = File.query.filter_by(id=file[0]).first()
+            db.session.expunge(file)
+            make_transient(file)
+            del file.id
+            del file.parent_id
+            file.commit_id = new_commit.id
+            files_to_add.append(file)
+    except SQLAlchemyError:
+        db.session.delete(new_commit)
+        db.session.commit()
+        return 'Internal error', 500
+    else:
+        db.session.add_all(files_to_add)
+        db.session.commit()
+        update_token_size(token_object, files_to_add)
+        return redirect(url_for('checkout', token=token_string, commit=new_commit.hash[:constants.HASH_OFFSET])), 302
+
+
+def delete_commit(token_object, commit):
+    commit_to_delete = Commit.query.filter_by(token=token_object).filter(Commit.hash.like(f"{commit}%")).first()
+    files_to_delete = File.query.filter_by(commit=commit_to_delete).all()
+    try:
+        for file in files_to_delete:
+            child_file = File.query.filter_by(parent_id=file.id).first()
+            if child_file:
+                child_file.parent_id = file.parent_id
+            db.session.delete(file)
+        db.session.delete(commit_to_delete)
+    except SQLAlchemyError:
+        db.session.rollback()
+        return False
+    else:
+        db.session.commit()
+        return True
+
+
+def delete_token(token_object):
+    commit_object = Commit.query.filter_by(token=token_object).all()
+    try:
+        for commit in commit_object():
+            File.query.filter_by(commit=commit_object).delete()
+            db.session.delete(commit)
+    except SQLAlchemyError:
+        db.session.rollback()
+        return False
+    else:
+        db.session.commit()
+        return True
+
+
 class Token(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
@@ -127,7 +190,7 @@ class File(db.Model):
     parent_id = db.Column(db.Integer)
 
     def __repr__(self):
-        return f'File {self.id, self.commit_id, self.filename, self.hash, self.parent_id}'
+        return f'File {" ".join([str(self.__dict__[key]) for key in self.__dict__.keys() if key != "data"])}'
 
 
 @app.route('/')
@@ -147,36 +210,6 @@ def generate():
     return render_template('generate.html', title='Token generated', token=token)
 
 
-def clone(t, commit):
-    token_object, token_string = generate_token()
-    initial_commit = Commit.query.filter_by(token=t).filter(
-        Commit.hash.like(f"{commit}%")).first()
-    new_commit = Commit(hash=generate_token_hash(generate_user_token(constants.TOKEN_BYTES_LENGTH)),
-                        message=initial_commit.message, token_id=token_object.id)
-    db.session.add(new_commit)
-    db.session.commit()
-    filelist = checkout_filelist(t, commit)
-    files_to_add = []
-    try:
-        for file in filelist:
-            file = File.query.filter_by(id=file[0]).first()
-            db.session.expunge(file)
-            make_transient(file)
-            del file.id
-            del file.parent_id
-            file.commit_id = new_commit.id
-            files_to_add.append(file)
-    except SQLAlchemyError:
-        db.session.delete(new_commit)
-        db.session.commit()
-        return 'Internal error', 500
-    else:
-        db.session.add_all(files_to_add)
-        db.session.commit()
-        update_token_size(token_object, files_to_add)
-        return redirect(url_for('checkout', token=token_string, commit=new_commit.hash[:constants.HASH_OFFSET])), 302
-
-
 @app.route('/<token>/')
 def bare_checkout(token):
     t = abort_if_token_nonexistent(token)
@@ -190,7 +223,13 @@ def bare_checkout(token):
 def checkout(token, commit):
     t = abort_if_token_nonexistent(token)
     if request.method == 'POST':
-        return clone(t, commit)
+        if request.form.get('clone', False):
+            return clone(t, commit)
+        elif request.form.get('delete', False):
+            if delete_commit(t, commit):
+                return redirect(url_for('list_commits', token=token))
+            else:
+                return 'Internal error', 500
     c = checkout_filelist(t, commit)
     files = []
     for item in c:
@@ -233,18 +272,18 @@ def changes(token, commit, filename):
         parent_line = parent_file_list[i]
         if child_line == parent_line:
             outcome.append(child_line)
-            print('values are the same', child_line)
+            # print('values are the same', child_line)
             continue
         if parent_line in gone_lines:
             outcome.append(parent_line + ' ---')
-            print('parent line in gone lines', parent_line)
+            # print('parent line in gone lines', parent_line)
         if child_line in added_lines:
             child_appended = child_line
             outcome.append(child_line + ' +++')
-            print('child line in added lines', child_line)
+            # print('child line in added lines', child_line)
         if child_line in child_file_set and child_line != child_appended:
             outcome.append(child_line)
-            print('shit worked', child_line)
+            # print('rest case', child_line)
     else:
         for i in range(last_index + 1, len(max_list)):
             line = max_list[i]
@@ -255,9 +294,17 @@ def changes(token, commit, filename):
     return '<p>'.join(outcome)
 
 
-@app.route('/<token>/commits')
+@app.route('/<token>/commits', methods=['GET', 'POST'])
 def list_commits(token):
     t = abort_if_token_nonexistent(token)
+    if request.method == 'POST':
+        if request.form.get('delete_validation', False) and request.form['delete_validation'] == f"delete {token[:6]}":
+            if delete_token(t):
+                return redirect('index')
+            else:
+                return 'Internal error...', 500
+        else:
+            flash('Wrong input! Not going to delete...')
     commits = Commit.query.filter_by(token=t).order_by(Commit.created_at.desc()).all()
     return render_template('commits.html', title='Commits list', token=token, commits=commits)
 
@@ -322,14 +369,14 @@ class ApiCommit(Resource):
             new_size = t.current_size + commit_size
         except SQLAlchemyError as exc:
             db.session.delete(c)
-            response = ("Internal error", 500)
+            response = ({"message": "Internal error"}, 500)
         else:
             if not file_list:
                 db.session.delete(c)
-                response = ('Commit was rejected, no new files or changed detected', 409)
+                response = ({"message": "Commit was rejected, no new files or changed detected"}, 409)
             elif new_size > constants.MAX_REP_SIZE:
                 db.session.delete(c)
-                response = ('Repository size constraint is exceeded, delete some commits to proceed', 409)
+                response = ({"message": "Repository size constraint is exceeded, delete some commits to proceed"}, 409)
             else:
                 db.session.add_all(file_list)
                 t.current_size = new_size
@@ -374,11 +421,21 @@ class ApiCheckout(Resource):
         return send_file(zip_response, mimetype='application/zip')
 
 
+class ApiDelete(Resource):
+    def delete(self, token, commit):
+        t = abort_if_token_nonexistent(token)
+        if delete_commit(t, commit):
+            return {"message": "OK"}, 204
+        else:
+            return {"message": "Internal error"}, 500
+
+
 api.add_resource(ApiGetRep, "/api/<string:token>")
 api.add_resource(ApiCommit, "/api/<string:token>/commit")
 api.add_resource(ApiList, "/api/<string:token>/list")
 api.add_resource(ApiPull, "/api/<string:token>/pull")
 api.add_resource(ApiCheckout, "/api/<string:token>/checkout/<string:commit>")
+api.add_resource(ApiDelete, "/api/<string:token>/delete/<string:commit>")
 
 if __name__ == '__main__':
     app.run(debug=True)

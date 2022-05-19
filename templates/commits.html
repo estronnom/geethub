@@ -7,9 +7,22 @@
 <body>
 <div>{{ token }} commits:</div>
 <p>
-    {% for c in commits %}
-        <a href={{ url_for('checkout', token=token, commit=c.hash[:6]) }}>{{ c.hash[:6] }} {{ c.created_at.strftime('%Y-%m-%d %H:%M:%S') }} {{ c.message }}</a>
-        <p>
-    {% endfor %}
+    {% if commits %}
+        {% for c in commits %}
+            <a href={{ url_for('checkout', token=token, commit=c.hash[:6]) }}>{{ c.hash[:6] }} {{ c.created_at.strftime('%Y-%m-%d %H:%M:%S') }} {{ c.message }}</a>
+            <p>
+        {% endfor %}
+        <form method='post' action={{ url_for('list_commits', token=token) }}>
+            <label>To delete this repository type "delete {{ token[:6] }}" and press delete button</label>
+            <p><input type="text" name="delete_validation" value="" required/>
+                <input type="submit" value="COMPLETLY DELETE {{ token[:6] }} REPOSITPRY"/>
+        </form>
+        <p>{% for msg in get_flashed_messages() %}
+            <div>{{ msg }}</div>
+        {% endfor %}
+    {% else %}
+        Your repository is empty
+        <p>Upload some files via post request
+    {% endif %}
 </body>
 </html>
