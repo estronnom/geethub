@@ -146,7 +146,7 @@ def delete_commit(token_object, commit):
 def delete_token(token_object):
     commit_object = Commit.query.filter_by(token=token_object).all()
     try:
-        for commit in commit_object():
+        for commit in commit_object:
             File.query.filter_by(commit=commit_object).delete()
             db.session.delete(commit)
     except SQLAlchemyError:
