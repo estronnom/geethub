@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response, session
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, make_response
 from flask_restful import Api, Resource, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,7 +13,6 @@ import zipfile
 import mimetypes
 import secrets
 from math import ceil
-import time
 import sys
 import io
 
@@ -367,7 +366,7 @@ class ApiCommit(Resource):
                 f = File(commit=c, filename=filename, data=file_handle, hash=file_hash, parent_id=parent_id)
                 file_list.append(f)
             new_size = t.current_size + commit_size
-        except SQLAlchemyError as exc:
+        except SQLAlchemyError:
             db.session.delete(c)
             response = ({"message": "Internal error"}, 500)
         else:
@@ -401,6 +400,7 @@ class ApiList(Resource):
         return response_json, 200
 
 
+# noinspection PyTypeChecker
 class ApiPull(Resource):
     def get(self, token):
         t = abort_if_token_nonexistent(token)
@@ -411,6 +411,7 @@ class ApiPull(Resource):
         return send_file(zip_response, mimetype='application/zip')
 
 
+# noinspection PyTypeChecker
 class ApiCheckout(Resource):
     def get(self, token, commit):
         t = abort_if_token_nonexistent(token)
