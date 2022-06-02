@@ -196,7 +196,7 @@ class File(db.Model):
 
 @app.route('/')
 def index():
-    if request.args.get('token', 0):
+    if request.args.get('token', None):
         token = request.args['token']
         if check_if_token_exists(token):
             return redirect(url_for('bare_checkout', token=token))
@@ -292,7 +292,7 @@ def changes(token, commit, filename):
                 outcome.append(line + symbol)
             else:
                 outcome.append(line)
-    return '<p>'.join(outcome)
+    return '<br>'.join(outcome)
 
 
 @app.route('/<token>/commits', methods=['GET', 'POST'])
@@ -402,7 +402,6 @@ class ApiList(Resource):
         return response_json, 200
 
 
-# noinspection PyTypeChecker
 class ApiPull(Resource):
     def get(self, token):
         t = abort_if_token_nonexistent(token)
@@ -413,7 +412,6 @@ class ApiPull(Resource):
         return send_file(zip_response, mimetype='application/zip')
 
 
-# noinspection PyTypeChecker
 class ApiCheckout(Resource):
     def get(self, token, commit):
         t = abort_if_token_nonexistent(token)

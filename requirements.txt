@@ -5,3 +5,4 @@ flask_restful
 Flask_SQLAlchemy
 SQLAlchemy
 Werkzeug
+pytest

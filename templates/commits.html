@@ -19,7 +19,7 @@
 <form method='post' action={{ url_for('list_commits', token=token) }}>
     <label>To delete this repository type "delete {{ token[:6] }}" and press delete button</label>
     <p><input type="text" name="delete_validation" value="" required/>
-        <input type="submit" value="COMPLETLY DELETE {{ token[:6] }} REPOSITPRY"/>
+        <input type="submit" value="COMPLETLY DELETE {{ token[:6] }} REPOSITORY"/>
 </form>
 <p>{% for msg in get_flashed_messages() %}
     <div>{{ msg }}</div>
