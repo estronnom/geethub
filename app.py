@@ -483,13 +483,13 @@ class ApiList(Resource):
         filelist = Commit.query.filter_by(token=t).all()
         if not filelist:
             return {'message': 'Repository is empty!'}, 404
-        else:
-            response_json = {}
+        response_json = {}
         for commit in filelist:
             filelist = checkout_filelist(t, commit.hash)
             filelist = [file.filename for file in filelist]
             response_json[commit.hash] = {'message': commit.message,
                                           'filelist': filelist}
+        response_json['current_size'] = t.current_size
         return response_json, 200
 
 
