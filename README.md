@@ -33,8 +33,8 @@ import requests as r
 with open('file1.txt', 'rb) as f1, open('file2.png', 'rb') as f2:
     url = "http://geethub.collectivism.ovh/api/your_token/commit"
     r.post(url,
-     data={'message': 'test commit'},
-      files={'file1': f1, 'file2': f2)
+            data={'message': 'test commit'},
+            files={'file1': f1, 'file2': f2})
 ```
 
 #### Getting list of commits in repository
