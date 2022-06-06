@@ -71,13 +71,14 @@ def pull_filelist(t):
     return c
 
 
-def generate_zip(file_list, zip_name):
-    with zipfile.ZipFile(zip_name, 'w') as zip_response:
+def generate_zip(file_list):
+    zip_bytes = io.BytesIO()
+    with zipfile.ZipFile(zip_bytes, 'w') as zip_response:
         for file in file_list:
             file_bytes = File.query.filter_by(id=file[0]).first().data
             file_bytes = zlib.decompress(file_bytes)
             zip_response.writestr(file[1], file_bytes)
-        return zip_response
+        return zip_bytes
 
 
 def generate_token():
@@ -407,9 +408,11 @@ class ApiPull(Resource):
         t = abort_if_token_nonexistent(token)
         filelist = pull_filelist(t)
         if not filelist:
-            return {'message': 'Repository is empty!'}, 404
-        zip_response = generate_zip(filelist, f'{token[:constants.HASH_OFFSET]}.zip')
-        return send_file(zip_response, mimetype='application/zip')
+            return {'message': 'Repository is empty!'}, 204
+        zip_response = generate_zip(filelist)
+        return send_file(zip_response,
+                         mimetype='application/zip',
+                         download_name=f'{token[:constants.HASH_OFFSET]}.zip')
 
 
 class ApiCheckout(Resource):
@@ -418,8 +421,10 @@ class ApiCheckout(Resource):
         filelist = checkout_filelist(t, commit)
         if not filelist:
             return {'message': 'Repository is empty!'}, 204
-        zip_response = generate_zip(filelist, f'{token[:constants.HASH_OFFSET]}_{commit[:constants.HASH_OFFSET]}.zip')
-        return send_file(zip_response, mimetype='application/zip')
+        zip_response = generate_zip(filelist)
+        return send_file(zip_response,
+                         mimetype='application/zip',
+                         download_name=f'{token[:constants.HASH_OFFSET]}_{commit[:constants.HASH_OFFSET]}.zip')
 
 
 class ApiDelete(Resource):
@@ -431,12 +436,37 @@ class ApiDelete(Resource):
             return {"message": "Internal error"}, 500
 
 
-api.add_resource(ApiGetRep, "/api/<string:token>")
-api.add_resource(ApiCommit, "/api/<string:token>/commit")
-api.add_resource(ApiList, "/api/<string:token>/list")
-api.add_resource(ApiPull, "/api/<string:token>/pull")
-api.add_resource(ApiCheckout, "/api/<string:token>/checkout/<string:commit>")
-api.add_resource(ApiDelete, "/api/<string:token>/delete/<string:commit>")
+class ApiFullTokenDelete(Resource):
+    def delete(self, token):
+        t = abort_if_token_nonexistent(token)
+        if delete_token(t):
+            return {"message": "OK"}, 204
+        else:
+            return {"message": "Internal error"}, 500
+
+
+api.add_resource(ApiGetRep,
+                 "/api/<string:token>",
+                 endpoint='api.getrep')
+api.add_resource(ApiCommit,
+                 "/api/<string:token>/commit",
+                 endpoint='api.commit')
+api.add_resource(ApiList,
+                 "/api/<string:token>/list",
+                 endpoint='api.list')
+api.add_resource(ApiPull,
+                 "/api/<string:token>/pull",
+                 endpoint='api.pull')
+api.add_resource(ApiCheckout,
+                 "/api/<string:token>/checkout/<string:commit>",
+                 endpoint='api.checkout')
+api.add_resource(ApiDelete,
+                 "/api/<string:token>/delete/<string:commit>",
+                 endpoint='api.delete')
+api.add_resource(ApiFullTokenDelete,
+                 "/api/<string:token>/totally/delete/this/repository",
+                 endpoint='api.totaldelete')
+
 
 if __name__ == '__main__':
     app.run(debug=True)
