@@ -4,5 +4,6 @@ Flask_Migrate
 flask_restful
 Flask_SQLAlchemy
 SQLAlchemy
+gunicorn
 Werkzeug
 pytest
